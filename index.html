@@ -1,164 +1,452 @@
-<!DOCTYPE html>
-<html lang="he" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Stock Picker | בחירת מניות חכמה</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-        .font-mono { font-family: 'JetBrains Mono', monospace; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
-    </style>
-</head>
-<body class="bg-[#020617] text-slate-200 min-h-screen selection:bg-emerald-500/30">
+import React, { useState } from 'react';
+import { GoogleGenAI } from "@google/genai";
+import { 
+  Search, 
+  TrendingUp, 
+  AlertTriangle, 
+  ShieldCheck, 
+  BarChart3, 
+  Loader2,
+  Clock,
+  Target,
+  Zap
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  ScatterChart, 
+  Scatter, 
+  XAxis, 
+  YAxis, 
+  ZAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  Cell,
+  Label,
+  LabelList
+} from 'recharts';
 
-    <div class="max-w-5xl mx-auto px-6 py-12">
-        <!-- Header -->
-        <header class="mb-16 text-center">
-            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold uppercase tracking-widest mb-6 animate-fade-in">
-                <i data-lucide="zap" class="w-3 h-3"></i>
-                Offline Smart Engine Enabled
+// Types
+interface StockResult {
+  ticker: string;
+  price: string;
+  riskLevel: 'Low' | 'Medium' | 'High';
+  riskExplanation: string;
+  marketCap: string;
+  whyBest: string;
+  technicalStatus: string;
+  timeHorizonAnalysis: string;
+  estimatedReturn: string;
+  volatility: number; // 1-10
+  numericReturn: number; // for calculation
+  score?: number;
+}
+
+type TimeUnit = 'Days' | 'Months' | 'Years';
+
+export default function App() {
+  const [minPrice, setMinPrice] = useState<string>('0');
+  const [maxPrice, setMaxPrice] = useState<string>('1000');
+  const [riskLevel, setRiskLevel] = useState<'Low' | 'Medium' | 'High'>('Medium');
+  const [horizonValue, setHorizonValue] = useState<number>(6);
+  const [horizonUnit, setHorizonUnit] = useState<TimeUnit>('Months');
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<StockResult[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSearch = async () => {
+    setLoading(true);
+    setError(null);
+    setResults([]);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const model = "gemini-3-flash-preview";
+      
+      const unitHebrew = {
+        'Days': 'ימים',
+        'Months': 'חודשים',
+        'Years': 'שנים'
+      }[horizonUnit];
+
+      const prompt = `
+        אתה עוזר השקעות ומומחה לאנליזה פיננסית.
+        מצא 5 מניות ספציפיות שעונות על הקריטריונים הבאים:
+        - טווח מחיר: בין ${minPrice} ל-${maxPrice} דולר.
+        - רמת סיכון מבוקשת: ${riskLevel === 'Low' ? 'נמוך' : riskLevel === 'Medium' ? 'בינוני' : 'גבוה'}.
+        - אופק השקעה: ${horizonValue} ${unitHebrew}.
+        
+        עבור כל מניה, ספק את הנתונים הבאים בפורמט JSON (מערך של אובייקטים):
+        1. ticker (סימול)
+        2. price (מחיר נוכחי)
+        3. riskLevel (Low/Medium/High)
+        4. riskExplanation (הסבר קצר למה היא דורגה כך)
+        5. marketCap (שווי שוק)
+        6. whyBest (למה זו הבחירה הטובה ביותר)
+        7. technicalStatus (מצב טכני)
+        8. timeHorizonAnalysis (התאמה לטווח הזמן)
+        9. estimatedReturn (מחרוזת עם אחוז התשואה המשוערת, למשל "15%")
+        10. numericReturn (מספר בלבד של התשואה המשוערת, למשל 15)
+        11. volatility (ציון תנודתיות מ-1 עד 10, כאשר 1 זה יציב מאוד ו-10 זה תנודתי מאוד)
+
+        השתמש ב-Google Search Grounding לנתונים עדכניים.
+        החזר רק JSON.
+      `;
+
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+        },
+      });
+
+      const text = response.text;
+      if (text) {
+        let parsedResults = JSON.parse(text);
+        if (!Array.isArray(parsedResults)) parsedResults = [parsedResults];
+        
+        const targetRiskMap = { 'Low': 3, 'Medium': 6, 'High': 9 };
+        const targetRisk = targetRiskMap[riskLevel];
+
+        const maxRet = Math.max(...parsedResults.map((s: any) => s.numericReturn), 1);
+        const finalResults = parsedResults.map((s: any) => {
+          const returnScore = (s.numericReturn / maxRet) * 100;
+          const riskDiff = Math.abs(s.volatility - targetRisk);
+          const riskMatchScore = Math.max(0, 100 - (riskDiff * 15));
+          let timeScore = 0;
+          if (horizonUnit === 'Days') timeScore = 100 - (s.volatility * 10);
+          else if (horizonUnit === 'Months') timeScore = 100 - (Math.abs(s.volatility - 5) * 10);
+          else timeScore = returnScore;
+          
+          return {
+            ...s,
+            score: Math.round((returnScore * 0.4) + (riskMatchScore * 0.4) + (timeScore * 0.2))
+          };
+        }).sort((a: any, b: any) => b.score - a.score);
+
+        setResults(finalResults);
+      }
+    } catch (err) {
+      console.error(err);
+      setError('אירעה שגיאה באיתור הנתונים. אנא נסה שנית.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const CustomTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      return (
+        <div className="bg-[#151619] border border-white/10 p-4 rounded-xl shadow-2xl backdrop-blur-md" dir="rtl">
+          <p className="text-emerald-500 font-bold text-lg mb-1">{data.ticker}</p>
+          <div className="space-y-1 text-xs font-mono opacity-70">
+            <p>תשואה: {data.numericReturn}%</p>
+            <p>סיכון: {data.volatility}/10</p>
+            <p className="text-white font-bold mt-2">ציון מדד: {data.score}</p>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0A0A0B] text-[#F0F0F0] font-sans selection:bg-emerald-500 selection:text-black" dir="rtl">
+      {/* Decorative Background */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-emerald-500/5 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-500/5 blur-[120px] rounded-full" />
+      </div>
+
+      {/* Header */}
+      <header className="relative z-10 border-b border-white/10 bg-black/40 backdrop-blur-md p-6">
+        <div className="max-w-7xl mx-auto flex justify-between items-center">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 bg-emerald-500 rounded-lg flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+              <TrendingUp className="text-black w-6 h-6" />
             </div>
-            <h1 class="text-5xl md:text-7xl font-bold tracking-tighter text-white mb-6 animate-fade-in">
-                בחירת מניות <span class="text-emerald-500 italic">חכמה</span>
-            </h1>
-            <p class="text-slate-400 text-lg max-w-2xl mx-auto leading-relaxed animate-fade-in">
-                מנוע ניתוח מקומי המבוסס על נתוני שוק עדכניים. ללא צורך בחיבור חיצוני או הגדרות API.
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">SmartInvest <span className="text-emerald-500">AI</span></h1>
+              <p className="text-[10px] uppercase tracking-[0.2em] opacity-40 font-mono">Advanced Financial Intelligence</p>
+            </div>
+          </div>
+          <div className="hidden md:flex items-center gap-6 text-[11px] font-mono">
+            <div className="flex items-center gap-2 opacity-60">
+              <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+              REAL-TIME ENGINE ACTIVE
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="relative z-10 max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Controls Panel */}
+        <aside className="lg:col-span-4 space-y-6">
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="bg-[#151619] border border-white/10 p-8 rounded-2xl shadow-2xl"
+          >
+            <div className="flex items-center gap-2 mb-8">
+              <Target className="w-5 h-5 text-emerald-500" />
+              <h2 className="text-lg font-semibold">הגדרות אסטרטגיה</h2>
+            </div>
+            
+            <div className="space-y-8">
+              {/* Price Range */}
+              <div className="space-y-3">
+                <label className="flex items-center justify-between text-[11px] uppercase tracking-wider opacity-40 font-mono">
+                  <span>טווח מחיר ($)</span>
+                  <span className="text-emerald-500">{minPrice} - {maxPrice}</span>
+                </label>
+                <div className="grid grid-cols-2 gap-4">
+                  <input 
+                    type="number" 
+                    value={minPrice}
+                    onChange={(e) => setMinPrice(e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono text-sm"
+                    placeholder="Min"
+                  />
+                  <input 
+                    type="number" 
+                    value={maxPrice}
+                    onChange={(e) => setMaxPrice(e.target.value)}
+                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono text-sm"
+                    placeholder="Max"
+                  />
+                </div>
+              </div>
+
+              {/* Risk Level */}
+              <div className="space-y-3">
+                <label className="text-[11px] uppercase tracking-wider opacity-40 font-mono">רמת סיכון</label>
+                <div className="flex p-1 bg-black/40 border border-white/10 rounded-xl">
+                  {(['Low', 'Medium', 'High'] as const).map((level) => (
+                    <button
+                      key={level}
+                      onClick={() => setRiskLevel(level)}
+                      className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${
+                        riskLevel === level 
+                          ? 'bg-emerald-500 text-black shadow-lg' 
+                          : 'hover:bg-white/5 opacity-60 hover:opacity-100'
+                      }`}
+                    >
+                      {level === 'Low' ? 'נמוך' : level === 'Medium' ? 'בינוני' : 'גבוה'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Time Horizon */}
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 text-[11px] uppercase tracking-wider opacity-40 font-mono">
+                  <Clock className="w-3 h-3" />
+                  אופק השקעה
+                </label>
+                <div className="flex gap-2">
+                  <input 
+                    type="number" 
+                    min="1"
+                    value={horizonValue}
+                    onChange={(e) => setHorizonValue(parseInt(e.target.value) || 1)}
+                    className="w-20 bg-black/40 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-emerald-500/50 transition-colors font-mono text-sm text-center"
+                  />
+                  <div className="flex-1 flex p-1 bg-black/40 border border-white/10 rounded-xl">
+                    {(['Days', 'Months', 'Years'] as const).map((unit) => (
+                      <button
+                        key={unit}
+                        onClick={() => setHorizonUnit(unit)}
+                        className={`flex-1 py-2 text-[10px] font-bold rounded-lg transition-all ${
+                          horizonUnit === unit 
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                            : 'opacity-40 hover:opacity-100 hover:bg-white/5'
+                        }`}
+                      >
+                        {unit === 'Days' ? 'ימים' : unit === 'Months' ? 'חודשים' : 'שנים'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <button 
+                onClick={handleSearch}
+                disabled={loading}
+                className="w-full bg-emerald-500 text-black font-bold py-4 rounded-xl flex items-center justify-center gap-3 hover:bg-emerald-400 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_30px_rgba(16,185,129,0.2)]"
+              >
+                {loading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <>
+                    <Search className="w-5 h-5" />
+                    <span>הפעל אנליזה חכמה</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </motion.div>
+
+          <div className="p-6 bg-white/5 border border-white/10 rounded-2xl">
+            <div className="flex gap-3 mb-3 text-emerald-500">
+              <Zap className="w-4 h-4 shrink-0" />
+              <span className="text-[10px] font-bold uppercase tracking-widest">Investment Score Algorithm</span>
+            </div>
+            <p className="text-xs leading-relaxed opacity-50">
+              הציון משקלל 40% פוטנציאל תשואה, 40% התאמה לרמת הסיכון שבחרת ו-20% אופטימיזציה לטווח הזמן.
             </p>
-        </header>
+          </div>
+        </aside>
 
-        <!-- Search Section -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12 animate-fade-in">
-            <div class="bg-slate-900/50 border border-white/10 p-6 rounded-3xl">
-                <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-4">סכום השקעה (₪)</label>
-                <input type="number" id="amount" value="10000" class="w-full bg-transparent text-3xl font-bold text-white focus:outline-none">
-            </div>
-            <div class="bg-slate-900/50 border border-white/10 p-6 rounded-3xl">
-                <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-4">רמת סיכון</label>
-                <select id="risk" class="w-full bg-transparent text-xl font-bold text-white focus:outline-none cursor-pointer">
-                    <option value="Low" class="bg-slate-900">נמוך (סולידי)</option>
-                    <option value="Medium" selected class="bg-slate-900">בינוני (מאוזן)</option>
-                    <option value="High" class="bg-slate-900">גבוה (צמיחה)</option>
-                </select>
-            </div>
-            <div class="bg-slate-900/50 border border-white/10 p-6 rounded-3xl">
-                <label class="block text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-4">טווח זמן</label>
-                <div class="flex items-center gap-2">
-                    <input type="number" id="horizonValue" value="1" class="w-12 bg-transparent text-xl font-bold text-white focus:outline-none">
-                    <select id="horizonUnit" class="bg-transparent text-xl font-bold text-white focus:outline-none cursor-pointer">
-                        <option value="שנים" class="bg-slate-900">שנים</option>
-                        <option value="חודשים" class="bg-slate-900">חודשים</option>
-                    </select>
+        {/* Results Panel */}
+        <section className="lg:col-span-8 space-y-6">
+          <AnimatePresence mode="wait">
+            {results.length > 0 && (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-[#151619] border border-white/10 p-8 rounded-2xl shadow-2xl"
+              >
+                <div className="flex justify-between items-center mb-8">
+                  <h3 className="text-[11px] uppercase tracking-widest opacity-40 font-bold">Risk vs. Reward Analysis</h3>
+                  <div className="flex gap-4 text-[9px] font-bold uppercase">
+                    <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> מומלץ (&gt;80)</div>
+                    <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-white/20"></span> רגיל</div>
+                  </div>
                 </div>
-            </div>
-        </div>
-
-        <button onclick="handleSearch()" id="searchBtn" class="w-full py-6 bg-white text-black font-black text-xl rounded-3xl hover:bg-emerald-400 transition-all mb-16 flex items-center justify-center gap-3 group">
-            <span>נתח שוק ומצא הזדמנויות</span>
-            <i data-lucide="arrow-left" class="w-6 h-6 group-hover:-translate-x-2 transition-transform"></i>
-        </button>
-
-        <!-- Results -->
-        <div id="loading" class="hidden text-center py-20">
-            <div class="inline-block w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
-            <p class="text-slate-400 animate-pulse">המנוע המקומי מנתח את הנתונים...</p>
-        </div>
-
-        <div id="results" class="space-y-6"></div>
-
-        <!-- Footer Disclaimer -->
-        <footer class="mt-20 pt-8 border-t border-white/5">
-            <div class="bg-emerald-500/5 border border-emerald-500/10 p-6 rounded-3xl flex gap-4">
-                <i data-lucide="info" class="w-6 h-6 text-emerald-500 shrink-0"></i>
-                <div>
-                    <h4 class="text-xs font-bold text-emerald-500 uppercase tracking-widest mb-2">מידע על המערכת</h4>
-                    <p class="text-xs leading-relaxed text-slate-500">
-                        גרסה זו פועלת באופן עצמאי ללא צורך ב-API חיצוני. הניתוח מתבצע על בסיס אלגוריתם פנימי ומאגר נתונים מובנה של המניות המובילות בשוק.
-                    </p>
-                </div>
-            </div>
-        </footer>
-    </div>
-
-    <script>
-        // Database of stocks for the local engine
-        const STOCKS_DB = [
-            { symbol: 'NVDA', name: 'Nvidia', sector: 'שבבים ובינה מלאכותית', risk: 'High', why: 'מובילה עולמית בתחום ה-AI עם צמיחה חסרת תקדים.', return: '+45%' },
-            { symbol: 'AAPL', name: 'Apple', sector: 'טכנולוגיה וצריכה', risk: 'Medium', why: 'יציבות פיננסית אדירה ומערכת אקולוגית חזקה.', return: '+18%' },
-            { symbol: 'MSFT', name: 'Microsoft', sector: 'תוכנה וענן', risk: 'Low', why: 'שליטה בשוק הענן והטמעת AI בכל מוצרי החברה.', return: '+15%' },
-            { symbol: 'TSLA', name: 'Tesla', sector: 'רכב חשמלי ואנרגיה', risk: 'High', why: 'חדשנות בתחום האוטונומיה והאנרגיה הירוקה.', return: '+35%' },
-            { symbol: 'GOOGL', name: 'Alphabet', sector: 'פרסום וטכנולוגיה', risk: 'Medium', why: 'שליטה מוחלטת בחיפוש ופיתוח מודלי שפה מתקדמים.', return: '+22%' },
-            { symbol: 'AMZN', name: 'Amazon', sector: 'מסחר אלקטרוני וענן', risk: 'Medium', why: 'שיפור ברווחיות הלוגיסטיקה וצמיחה ב-AWS.', return: '+20%' },
-            { symbol: 'META', name: 'Meta', sector: 'רשתות חברתיות', risk: 'High', why: 'התייעלות מרשימה והשקעה מאסיבית במטאוורס ו-AI.', return: '+28%' },
-            { symbol: 'BRK.B', name: 'Berkshire Hathaway', sector: 'פיננסים ואחזקות', risk: 'Low', why: 'ניהול שמרני של וורן באפט, מתאים לטווח ארוך.', return: '+10%' },
-            { symbol: 'V', name: 'Visa', sector: 'תשלומים', risk: 'Low', why: 'דואופול עולמי בתשלומים עם שולי רווח גבוהים.', return: '+12%' },
-            { symbol: 'JPM', name: 'JPMorgan Chase', sector: 'בנקאות', risk: 'Medium', why: 'הבנק הגדול והיציב בארה"ב, נהנה מסביבת ריבית גבוהה.', return: '+14%' }
-        ];
-
-        lucide.createIcons();
-
-        function handleSearch() {
-            const risk = document.getElementById('risk').value;
-            const btn = document.getElementById('searchBtn');
-            const loading = document.getElementById('loading');
-            const resultsDiv = document.getElementById('results');
-
-            btn.disabled = true;
-            loading.classList.remove('hidden');
-            resultsDiv.innerHTML = '';
-
-            // Simulate "thinking" time
-            setTimeout(() => {
-                // Filter stocks based on risk level
-                let filtered = STOCKS_DB.filter(s => s.risk === risk);
                 
-                // If not enough of exact risk, add some others
-                if (filtered.length < 3) {
-                    filtered = [...filtered, ...STOCKS_DB.filter(s => s.risk !== risk)].slice(0, 3);
-                }
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                      <XAxis 
+                        type="number" 
+                        dataKey="volatility" 
+                        name="Risk" 
+                        domain={[0, 11]} 
+                        stroke="rgba(255,255,255,0.3)" 
+                        fontSize={10}
+                      >
+                        <Label value="Volatility (Risk)" position="bottom" offset={0} fill="rgba(255,255,255,0.3)" fontSize={10} />
+                      </XAxis>
+                      <YAxis 
+                        type="number" 
+                        dataKey="numericReturn" 
+                        name="Return" 
+                        stroke="rgba(255,255,255,0.3)" 
+                        fontSize={10}
+                      >
+                        <Label value="Return (%)" angle={-90} position="left" offset={0} fill="rgba(255,255,255,0.3)" fontSize={10} />
+                      </YAxis>
+                      <ZAxis type="number" dataKey="score" range={[50, 400]} />
+                      <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3' }} />
+                      <Scatter name="Stocks" data={results}>
+                        {results.map((entry, index) => (
+                          <Cell 
+                            key={`cell-${index}`} 
+                            fill={entry.score && entry.score >= 80 ? '#10b981' : 'rgba(255,255,255,0.1)'} 
+                          />
+                        ))}
+                        <LabelList dataKey="ticker" position="top" style={{ fill: 'rgba(255,255,255,0.5)', fontSize: '10px', fontFamily: 'monospace' }} />
+                      </Scatter>
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-                // Shuffle and pick 3
-                const selected = filtered.sort(() => 0.5 - Math.random()).slice(0, 3);
-
-                selected.forEach(stock => {
-                    const card = document.createElement('div');
-                    card.className = 'bg-slate-900/50 border border-white/10 p-8 rounded-[2rem] animate-fade-in';
-                    card.innerHTML = `
-                        <div class="flex flex-col md:flex-row justify-between gap-6 mb-6">
-                            <div class="flex items-center gap-4">
-                                <div class="w-14 h-14 bg-white text-black rounded-2xl flex items-center justify-center font-black text-lg">${stock.symbol}</div>
-                                <div>
-                                    <h3 class="text-xl font-bold text-white">${stock.name}</h3>
-                                    <p class="text-slate-500 text-xs">${stock.sector}</p>
-                                </div>
-                            </div>
-                            <div class="text-left md:text-right">
-                                <div class="text-2xl font-mono font-bold text-white">$${(Math.random() * 500 + 100).toFixed(2)}</div>
-                                <div class="text-emerald-500 text-sm font-bold">+${(Math.random() * 3 + 0.5).toFixed(2)}%</div>
-                            </div>
+          <div className="bg-[#151619] border border-white/10 rounded-2xl overflow-hidden shadow-2xl min-h-[400px]">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-[400px]">
+                <Loader2 className="w-12 h-12 text-emerald-500 animate-spin mb-4" />
+                <p className="text-lg font-medium">מנתח נתוני שוק בזמן אמת...</p>
+              </div>
+            ) : results.length > 0 ? (
+              <div className="divide-y divide-white/5">
+                {results.map((stock, idx) => (
+                  <motion.div 
+                    key={stock.ticker}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.1 }}
+                    className="p-8 hover:bg-white/[0.02] transition-all group"
+                  >
+                    <div className="grid grid-cols-12 items-center mb-6">
+                      <div className="col-span-3">
+                        <div className="text-2xl font-black font-mono text-emerald-400">{stock.ticker}</div>
+                        <div className="text-[10px] opacity-40 font-mono mt-1">{stock.technicalStatus}</div>
+                      </div>
+                      <div className="col-span-2">
+                        <div className="text-lg font-mono">${stock.price}</div>
+                        <div className="text-[10px] opacity-40 uppercase tracking-wider">Current Price</div>
+                      </div>
+                      <div className="col-span-3">
+                        <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-[10px] font-bold uppercase tracking-wider ${
+                          stock.riskLevel === 'Low' ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' :
+                          stock.riskLevel === 'Medium' ? 'border-blue-500/20 bg-blue-500/10 text-blue-400' :
+                          'border-orange-500/20 bg-orange-500/10 text-orange-400'
+                        }`}>
+                          {stock.riskLevel === 'Low' ? <ShieldCheck className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
+                          {stock.riskLevel} Risk
                         </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6 border-t border-white/5">
-                            <div class="bg-emerald-500/5 p-4 rounded-2xl border border-emerald-500/10">
-                                <p class="text-[10px] font-bold text-emerald-500 uppercase mb-1">ניתוח המערכת</p>
-                                <p class="text-xs opacity-80">${stock.why}</p>
+                      </div>
+                      <div className="col-span-4 text-left">
+                        <div className="flex items-center justify-end gap-4">
+                          <div className="text-right">
+                            <div className="text-[9px] font-bold opacity-30 uppercase tracking-wider">Investment Score</div>
+                            <div className={`text-xs font-bold ${stock.score && stock.score >= 80 ? 'text-emerald-500' : 'opacity-60'}`}>
+                              {stock.score && stock.score >= 80 ? 'מומלץ מאוד' : 'ביצועים טובים'}
                             </div>
-                            <div class="bg-blue-500/5 p-4 rounded-2xl border border-blue-500/10">
-                                <p class="text-[10px] font-bold text-blue-400 uppercase mb-1">פוטנציאל תשואה</p>
-                                <p class="text-lg font-mono font-bold text-blue-400">${stock.return}</p>
-                            </div>
+                          </div>
+                          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center font-black text-xl font-mono shadow-2xl ${
+                            stock.score && stock.score >= 80 ? 'bg-emerald-500 text-black' : 'bg-white/5 border border-white/10'
+                          }`}>
+                            {stock.score}
+                          </div>
                         </div>
-                    `;
-                    resultsDiv.appendChild(card);
-                });
+                      </div>
+                    </div>
 
-                btn.disabled = false;
-                loading.classList.add('hidden');
-            }, 1500);
-        }
-    </script>
-</body>
-</html>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 pt-8 border-t border-white/5">
+                      <div className="space-y-2">
+                        <h4 className="text-[10px] uppercase tracking-widest opacity-30 font-bold">ניתוח אסטרטגי</h4>
+                        <p className="text-xs leading-relaxed opacity-70">{stock.whyBest}</p>
+                      </div>
+                      <div className="space-y-2">
+                        <h4 className="text-[10px] uppercase tracking-widest opacity-30 font-bold">התאמה לטווח</h4>
+                        <p className="text-xs leading-relaxed opacity-70 italic">{stock.timeHorizonAnalysis}</p>
+                      </div>
+                      <div className="space-y-2 bg-emerald-500/5 p-4 rounded-2xl border border-emerald-500/10">
+                        <h4 className="text-[10px] uppercase tracking-widest text-emerald-500 font-bold">תשואה משוערת</h4>
+                        <p className="text-xl font-mono font-bold text-emerald-500">{stock.estimatedReturn}</p>
+                        <p className="text-[9px] opacity-40">מבוסס על תחזיות אנליסטים ונתוני שוק</p>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-[400px] opacity-20">
+                <BarChart3 className="w-16 h-16 mb-4" />
+                <p className="text-lg italic">הזן קריטריונים והפעל אנליזה...</p>
+              </div>
+            )}
+          </div>
+
+          <footer className="p-8 bg-white/5 border border-white/10 rounded-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <AlertTriangle className="w-5 h-5 text-orange-500" />
+              <h3 className="text-sm font-bold uppercase tracking-[0.2em]">Legal Disclaimer</h3>
+            </div>
+            <p className="text-[11px] leading-relaxed opacity-40 text-justify">
+              המידע המופק באמצעות המערכת מבוסס על בינה מלאכותית ונתוני שוק גלויים. אין לראות במידע זה ייעוץ השקעות. השקעה בשוק ההון כרוכה בסיכון משמעותי. המערכת אינה אחראית לכל נזק או הפסד שייגרם כתוצאה מהסתמכות על המידע המוצג.
+            </p>
+          </footer>
+        </section>
+      </main>
+    </div>
+  );
+}
